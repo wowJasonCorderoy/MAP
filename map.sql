@@ -2,6 +2,7 @@ declare so array<STRING>;
 DECLARE dateFrom DATE;
 DECLARE dateTo DATE;
 
+
 set so = ['1030', '1005', '2010', '1060', '2030'];
 set dateTo = DATE_ADD(CURRENT_DATE("Australia/Sydney"), INTERVAL -1 DAY);
 set dateFrom = DATE_ADD(dateTo, INTERVAL -364 DAY);
@@ -62,18 +63,6 @@ from soh0 a
 left join articleSales b on (a.article=b.Article) and (a.salesorg_id = b.SalesOrg) and (a.site=b.Site) and (a.article_uom=b.Sales_Unit) and (a.soh_date=b.Calendar_Day)
 );
 
--- create temp table soh0_SalesSummarySite as (
--- select salesorg_id, site, article_uom, soh_date,
--- sum(Sales_ExclTax) as Sales_ExclTax,
--- sum(Sales_Qty_SUoM) as Sales_Qty_SUoM,
--- (case when sum(Sales_Qty_SUoM) = 0 then NULL else sum(Sales_ExclTax)/sum(Sales_Qty_SUoM) end) as ASP,
--- sum(stock_at_map) as stock_at_map,
--- sum(stock_on_hand) as stock_on_hand,
--- (case when sum(stock_on_hand) = 0 then null else sum(stock_at_map)/sum(stock_on_hand) end) as map
--- from soh0_sales
--- group by 1,2,3,4
--- );
-
 create temp table soh0_articleSalesOrg as (
 select salesorg_id, article_uom, article, soh_date,
 sum(ifnull(Sales_ExclTax,0)) as Sales_ExclTax,
@@ -90,7 +79,20 @@ group by 1,2,3,4
 create or replace table `gcp-wow-finance-de-lab-dev.017_map.00_mapData` as (
 select a.*,
 ifnull(b.stock_at_map,0) as stock_at_map_art_SalesOrg, ifnull(b.stock_on_hand,0) as stock_on_hand_art_SalesOrg, b.map as map_art_SalesOrg, 
-ifnull(b.Sales_ExclTax,0) as Sales_ExclTax_art_SalesOrg, ifnull(b.Sales_Qty_SUoM,0) as Sales_Qty_SUoM_art_SalesOrg, b.ASP as ASP_art_SalesOrg
+ifnull(b.Sales_ExclTax,0) as Sales_ExclTax_art_SalesOrg, ifnull(b.Sales_Qty_SUoM,0) as Sales_Qty_SUoM_art_SalesOrg, b.ASP as ASP_art_SalesOrg,
+
+## create salesorg columns excluding this records data. In case a sites soh is >% of total salesorgs SOH. Better not letting that sites MAP influence the CONTROL group at all.
+ifnull(b.stock_at_map,0)-ifnull(a.stock_at_map,0) as stock_at_map_art_SalesOrg_exclRec, ifnull(b.stock_on_hand,0)-ifnull(a.stock_on_hand,0) as stock_on_hand_art_SalesOrg_exclRec, 
+(case
+when (ifnull(b.stock_at_map,0)-ifnull(a.stock_at_map,0)) = 0 then null
+else
+(ifnull(b.stock_on_hand,0)-ifnull(a.stock_on_hand,0))/(ifnull(b.stock_at_map,0)-ifnull(a.stock_at_map,0)) end) as map_art_SalesOrg_exclRec,
+ifnull(b.Sales_ExclTax,0)-ifnull(a.Sales_ExclTax,0) as Sales_ExclTax_art_SalesOrg_exclRec, ifnull(b.Sales_Qty_SUoM,0)-ifnull(a.Sales_Qty_SUoM,0) as Sales_Qty_SUoM_art_SalesOrg_exclRec, 
+(case
+when (ifnull(b.Sales_Qty_SUoM,0)-ifnull(a.Sales_Qty_SUoM,0)) = 0 then null
+else
+(ifnull(b.Sales_ExclTax,0)-ifnull(a.Sales_ExclTax,0))/(ifnull(b.Sales_Qty_SUoM,0)-ifnull(a.Sales_Qty_SUoM,0)) end) as ASP_art_SalesOrg_exclRec,
+
 from soh0_sales a
 left join
 soh0_articleSalesOrg b
@@ -118,8 +120,11 @@ from
 select *,
 map-map_art_SalesOrg as map_spread,
 
-AVG(map-map_art_SalesOrg) OVER (PARTITION BY salesorg_id,	site,	article,	ArticleDescription,	article_uom ORDER BY UNIX_DATE(soh_date) RANGE BETWEEN 7 PRECEDING AND CURRENT ROW) AS map_spread_ma,
-stddev(map-map_art_SalesOrg) OVER (PARTITION BY salesorg_id,	site,	article,	ArticleDescription,	article_uom ORDER BY UNIX_DATE(soh_date) RANGE BETWEEN 7 PRECEDING AND CURRENT ROW) AS map_spread_std
+-- AVG(map-map_art_SalesOrg) OVER (PARTITION BY salesorg_id,	site,	article,	ArticleDescription,	article_uom ORDER BY UNIX_DATE(soh_date) RANGE BETWEEN 7 PRECEDING AND CURRENT ROW) AS map_spread_ma,
+-- stddev(map-map_art_SalesOrg) OVER (PARTITION BY salesorg_id,	site,	article,	ArticleDescription,	article_uom ORDER BY UNIX_DATE(soh_date) RANGE BETWEEN 7 PRECEDING AND CURRENT ROW) AS map_spread_std
+
+AVG(map-map_art_SalesOrg_exclRec) OVER (PARTITION BY salesorg_id,	site,	article,	ArticleDescription,	article_uom ORDER BY UNIX_DATE(soh_date) RANGE BETWEEN 7 PRECEDING AND CURRENT ROW) AS map_spread_ma,
+stddev(map-map_art_SalesOrg_exclRec) OVER (PARTITION BY salesorg_id,	site,	article,	ArticleDescription,	article_uom ORDER BY UNIX_DATE(soh_date) RANGE BETWEEN 7 PRECEDING AND CURRENT ROW) AS map_spread_std
 
 from `gcp-wow-finance-de-lab-dev.017_map.00_mapData`
 -- where site = '1004' and 
@@ -152,9 +157,17 @@ lag(stock_at_map_art_SalesOrg) over(partition by salesorg_id,site,article,Articl
 lag(stock_on_hand_art_SalesOrg) over(partition by salesorg_id,site,article,ArticleDescription,article_uom order by soh_date) as lag_stock_on_hand_art_SalesOrg,
 lag(map_art_SalesOrg) over(partition by salesorg_id,site,article,ArticleDescription,article_uom order by soh_date) as lag_map_art_SalesOrg,
 
+lag(stock_at_map_art_SalesOrg_exclRec) over(partition by salesorg_id,site,article,ArticleDescription,article_uom order by soh_date) as lag_stock_at_map_art_SalesOrg_exclRec,
+lag(stock_on_hand_art_SalesOrg_exclRec) over(partition by salesorg_id,site,article,ArticleDescription,article_uom order by soh_date) as lag_stock_on_hand_art_SalesOrg_exclRec,
+lag(map_art_SalesOrg_exclRec) over(partition by salesorg_id,site,article,ArticleDescription,article_uom order by soh_date) as lag_map_art_SalesOrg_exclRec,
+
 lag(Sales_ExclTax_art_SalesOrg) over(partition by salesorg_id,site,article,ArticleDescription,article_uom order by soh_date) as lag_Sales_ExclTax_art_SalesOrg,
 lag(Sales_Qty_SUoM_art_SalesOrg) over(partition by salesorg_id,site,article,ArticleDescription,article_uom order by soh_date) as lag_Sales_Qty_SUoM_art_SalesOrg,
 lag(ASP_art_SalesOrg) over(partition by salesorg_id,site,article,ArticleDescription,article_uom order by soh_date) as lag_ASP_art_SalesOrg,
+
+lag(Sales_ExclTax_art_SalesOrg_exclRec) over(partition by salesorg_id,site,article,ArticleDescription,article_uom order by soh_date) as lag_Sales_ExclTax_art_SalesOrg_exclRec,
+lag(Sales_Qty_SUoM_art_SalesOrg_exclRec) over(partition by salesorg_id,site,article,ArticleDescription,article_uom order by soh_date) as lag_Sales_Qty_SUoM_art_SalesOrg_exclRec,
+lag(ASP_art_SalesOrg_exclRec) over(partition by salesorg_id,site,article,ArticleDescription,article_uom order by soh_date) as lag_ASP_art_SalesOrg_exclRec,
 
 lag(map_spread) over(partition by salesorg_id,site,article,ArticleDescription,article_uom order by soh_date) as lag_map_spread,
 lag(map_spread_ma) over(partition by salesorg_id,site,article,ArticleDescription,article_uom order by soh_date) as lag_map_spread_ma,
@@ -169,6 +182,7 @@ from d2
 d4 as (
 select *,
 map-lag_map as map_diff,
+stock_at_map-lag_stock_at_map as stock_at_map_diff,
 ASP-lag_asp as ASP_diff,
 (case when lag_map = 0 then null else map/lag_map-1 end) as map_perc_diff,
 (case when lag_asp = 0 then null else asp/lag_asp-1 end) as ASP_perc_diff,
@@ -183,14 +197,14 @@ from d3
 )
 select *,
 (case
-when salesorg_id in ('1005', '1030') AND abs(map_diff)*stock_on_hand > 8000 then true
-when salesorg_id in ('1060') AND abs(map_diff)*stock_on_hand > 200 then true
-when salesorg_id in ('2010', '2030') AND abs(map_diff)*stock_on_hand > 800 then true
+when salesorg_id in ('1005', '1030') AND abs(stock_at_map_diff) > 8000 then true
+when salesorg_id in ('1060') AND abs(stock_at_map_diff) > 200 then true
+when salesorg_id in ('2010', '2030') AND abs(stock_at_map_diff) > 800 then true
 else false end) as detected_by_existing_method,
 (case
-when abs(map_spread_z)>2 and salesorg_id in ('1005', '1030') AND abs(map_diff)*stock_on_hand > 8000 then true
-when abs(map_spread_z)>2 and salesorg_id in ('1060') AND abs(map_diff)*stock_on_hand > 200 then true
-when abs(map_spread_z)>2 and salesorg_id in ('2010', '2030') AND abs(map_diff)*stock_on_hand > 800 then true
+when abs(map_spread_z)>2 and salesorg_id in ('1005', '1030') AND abs(stock_at_map_diff) > 8000 then true
+when abs(map_spread_z)>2 and salesorg_id in ('1060') AND abs(stock_at_map_diff) > 200 then true
+when abs(map_spread_z)>2 and salesorg_id in ('2010', '2030') AND abs(stock_at_map_diff) > 800 then true
 --when abs(spread_z)>2 then true
 else false end) as detected_record_v_salesOrg_map_method
 from d4
