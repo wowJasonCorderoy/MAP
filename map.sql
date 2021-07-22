@@ -197,9 +197,9 @@ from d3
 )
 select *,
 (case
-when salesorg_id in ('1005', '1030') AND abs(stock_at_map_diff) > 8000 then true
-when salesorg_id in ('1060') AND abs(stock_at_map_diff) > 200 then true
-when salesorg_id in ('2010', '2030') AND abs(stock_at_map_diff) > 800 then true
+when salesorg_id in ('1005', '1030') AND abs(map_diff)*stock_on_hand > 8000 then true
+when salesorg_id in ('1060') AND abs(map_diff)*stock_on_hand > 200 then true
+when salesorg_id in ('2010', '2030') AND abs(map_diff)*stock_on_hand > 800 then true
 else false end) as detected_by_existing_method,
 (case
 when abs(map_spread_z)>2 and salesorg_id in ('1005', '1030') AND abs(stock_at_map_diff) > 8000 then true
