@@ -84,9 +84,10 @@ ifnull(b.Sales_ExclTax,0) as Sales_ExclTax_art_SalesOrg, ifnull(b.Sales_Qty_SUoM
 ## create salesorg columns excluding this records data. In case a sites soh is >% of total salesorgs SOH. Better not letting that sites MAP influence the CONTROL group at all.
 ifnull(b.stock_at_map,0)-ifnull(a.stock_at_map,0) as stock_at_map_art_SalesOrg_exclRec, ifnull(b.stock_on_hand,0)-ifnull(a.stock_on_hand,0) as stock_on_hand_art_SalesOrg_exclRec, 
 (case
-when (ifnull(b.stock_at_map,0)-ifnull(a.stock_at_map,0)) = 0 then null
+when (ifnull(b.stock_on_hand,0)-ifnull(a.stock_on_hand,0)) = 0 then null
 else
-(ifnull(b.stock_on_hand,0)-ifnull(a.stock_on_hand,0))/(ifnull(b.stock_at_map,0)-ifnull(a.stock_at_map,0)) end) as map_art_SalesOrg_exclRec,
+(ifnull(b.stock_at_map,0)-ifnull(a.stock_at_map,0))/(ifnull(b.stock_on_hand,0)-ifnull(a.stock_on_hand,0)) end) as map_art_SalesOrg_exclRec,
+
 ifnull(b.Sales_ExclTax,0)-ifnull(a.Sales_ExclTax,0) as Sales_ExclTax_art_SalesOrg_exclRec, ifnull(b.Sales_Qty_SUoM,0)-ifnull(a.Sales_Qty_SUoM,0) as Sales_Qty_SUoM_art_SalesOrg_exclRec, 
 (case
 when (ifnull(b.Sales_Qty_SUoM,0)-ifnull(a.Sales_Qty_SUoM,0)) = 0 then null
@@ -114,17 +115,27 @@ create or replace table `gcp-wow-finance-de-lab-dev.017_map.01_mapData` as (
 with d0 as (
 select *, 
 map_spread_ma-map_spread_std*2 as map_spread_lower ,
-map_spread_ma+map_spread_std*2 as map_spread_upper
+map_spread_ma+map_spread_std*2 as map_spread_upper ,
+
+asp_map_spread_ma-asp_map_spread_std*2 as asp_map_spread_lower ,
+asp_map_spread_ma+map_spread_std*2 as asp_map_spread_upper
+
 from
 (
 select *,
-map-map_art_SalesOrg as map_spread,
+--map-map_art_SalesOrg as map_spread,
+map-map_art_SalesOrg_exclRec as map_spread,
+
+ASP-map as asp_map_spread,
 
 -- AVG(map-map_art_SalesOrg) OVER (PARTITION BY salesorg_id,	site,	article,	ArticleDescription,	article_uom ORDER BY UNIX_DATE(soh_date) RANGE BETWEEN 7 PRECEDING AND CURRENT ROW) AS map_spread_ma,
 -- stddev(map-map_art_SalesOrg) OVER (PARTITION BY salesorg_id,	site,	article,	ArticleDescription,	article_uom ORDER BY UNIX_DATE(soh_date) RANGE BETWEEN 7 PRECEDING AND CURRENT ROW) AS map_spread_std
 
 AVG(map-map_art_SalesOrg_exclRec) OVER (PARTITION BY salesorg_id,	site,	article,	ArticleDescription,	article_uom ORDER BY UNIX_DATE(soh_date) RANGE BETWEEN 7 PRECEDING AND CURRENT ROW) AS map_spread_ma,
-stddev(map-map_art_SalesOrg_exclRec) OVER (PARTITION BY salesorg_id,	site,	article,	ArticleDescription,	article_uom ORDER BY UNIX_DATE(soh_date) RANGE BETWEEN 7 PRECEDING AND CURRENT ROW) AS map_spread_std
+stddev(map-map_art_SalesOrg_exclRec) OVER (PARTITION BY salesorg_id,	site,	article,	ArticleDescription,	article_uom ORDER BY UNIX_DATE(soh_date) RANGE BETWEEN 7 PRECEDING AND CURRENT ROW) AS map_spread_std,
+
+AVG(ASP-map) OVER (PARTITION BY salesorg_id,	site,	article,	ArticleDescription,	article_uom ORDER BY UNIX_DATE(soh_date) RANGE BETWEEN 7 PRECEDING AND CURRENT ROW) AS asp_map_spread_ma,
+stddev(ASP-map) OVER (PARTITION BY salesorg_id,	site,	article,	ArticleDescription,	article_uom ORDER BY UNIX_DATE(soh_date) RANGE BETWEEN 7 PRECEDING AND CURRENT ROW) AS asp_map_spread_std
 
 from `gcp-wow-finance-de-lab-dev.017_map.00_mapData`
 -- where site = '1004' and 
@@ -134,7 +145,8 @@ from `gcp-wow-finance-de-lab-dev.017_map.00_mapData`
 ),
 d1 as (
 select *,
-(case when map_spread_std = 0 then null else (map_spread-map_spread_ma)/map_spread_std end ) as map_spread_z
+(case when map_spread_std = 0 then null else (map_spread-map_spread_ma)/map_spread_std end ) as map_spread_z,
+(case when asp_map_spread_std = 0 then null else (asp_map_spread-asp_map_spread_ma)/asp_map_spread_std end ) as asp_map_spread_z
 from d0
 ),
 d2 as (
@@ -175,7 +187,14 @@ lag(map_spread_std) over(partition by salesorg_id,site,article,ArticleDescriptio
 lag(map_spread_lower) over(partition by salesorg_id,site,article,ArticleDescription,article_uom order by soh_date) as lag_map_spread_lower,
 lag(map_spread_upper) over(partition by salesorg_id,site,article,ArticleDescription,article_uom order by soh_date) as lag_map_spread_upper,
 lag(map_spread_z) over(partition by salesorg_id,site,article,ArticleDescription,article_uom order by soh_date) as lag_map_spread_z,
-lag(map_dollar_impact) over(partition by salesorg_id,site,article,ArticleDescription,article_uom order by soh_date) as lag_map_dollar_impact
+lag(map_dollar_impact) over(partition by salesorg_id,site,article,ArticleDescription,article_uom order by soh_date) as lag_map_dollar_impact,
+
+lag(asp_map_spread) over(partition by salesorg_id,site,article,ArticleDescription,article_uom order by soh_date) as lag_asp_map_spread,
+lag(asp_map_spread_ma) over(partition by salesorg_id,site,article,ArticleDescription,article_uom order by soh_date) as lag_asp_map_spread_ma,
+lag(asp_map_spread_std) over(partition by salesorg_id,site,article,ArticleDescription,article_uom order by soh_date) as lag_asp_map_spread_std,
+lag(asp_map_spread_lower) over(partition by salesorg_id,site,article,ArticleDescription,article_uom order by soh_date) as lag_asp_map_spread_lower,
+lag(asp_map_spread_upper) over(partition by salesorg_id,site,article,ArticleDescription,article_uom order by soh_date) as lag_asp_map_spread_upper,
+lag(asp_map_spread_z) over(partition by salesorg_id,site,article,ArticleDescription,article_uom order by soh_date) as lag_asp_map_spread_z
 
 from d2
 ),
