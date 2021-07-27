@@ -7,7 +7,71 @@ set so = ['1030', '1005', '2010', '1060', '2030'];
 set dateTo = DATE_ADD(CURRENT_DATE("Australia/Sydney"), INTERVAL -1 DAY);
 set dateFrom = DATE_ADD(dateTo, INTERVAL -364 DAY);
 
-## gen price family table to attach to priceFam table later
+############################################################
+### START: create ASP table (regardless of whether there were any sales for that site article pair for that day) - excl UOM in this view
+
+CREATE TEMP FUNCTION f_date_add(d date, inc int64) AS (DATE_ADD(d, INTERVAL inc DAY));
+
+create or replace table
+`gcp-wow-finance-de-lab-dev.017_map.daily_site_article_sellPrice` as (
+select *
+from
+(
+with 
+dateTable as (
+SELECT day
+FROM UNNEST(
+    #GENERATE_DATE_ARRAY(f_date_add(CURRENT_DATE(), -364), CURRENT_DATE(), INTERVAL 1 DAY)
+    GENERATE_DATE_ARRAY(dateFrom, dateTo, INTERVAL 1 DAY)
+) AS day
+),
+dat as (
+SELECT 
+    ltrim(Article,'0') as Article,
+    ifnull(Site,'') as Site,
+    cast(DateSellPriceStart as date) as DateSellPriceStart,
+    cast(max(CurrentSellPrice) as float64) as CurrentSellPrice
+--Article, Site, DateSellPriceStart, cast(max(CurrentSellPrice) as float64) as CurrentSellPrice
+FROM `gcp-wow-ent-im-tbl-prod.adp_dm_masterdata_view.dim_article_site_uom_v_hist` 
+where DateSellPriceStart is not null and DateSellPriceStart != ''
+group by 1,2,3
+),
+dat2 as (
+select *,
+
+ifnull(
+  f_date_add(
+  cast(lead(DateSellPriceStart) over(partition by Article, Site order by DateSellPriceStart) as DATE)
+  , -1)
+  , f_date_add(CURRENT_DATE("Australia/Sydney"), 364)#,cast('2999-01-01' as DATE)
+  )
+  as to_DateSellPriceStart
+
+from dat
+
+--where DateSellPriceStart is not null and DateSellPriceStart != ''
+
+)
+select dt.*, d.*
+--d.Article, d.Site, dt.day, max(d.CurrentSellPrice) as sell_price
+from dateTable dt, 
+dat2 d 
+where 
+d.DateSellPriceStart<=dt.day and
+d.to_DateSellPriceStart>=dt.day
+-- dt.day>=cast(d.DateSellPriceStart as date) and
+-- dt.day <= cast(d.to_DateSellPriceStart as date)
+
+--group by 1,2,3
+order by d.Article, d.Site, dt.day
+)
+
+);
+
+### END: create ASP table (regardless of whether there were any sales for that site article pair for that day) - excl UOM in this view
+############################################################
+
+## gen price family table to attach to priceFam table later - Get ASP from daily price table NOT from actual sales!!!
 create temp table articleSales as (
 SELECT
     ifnull(SalesOrg,'') as SalesOrg,
@@ -16,8 +80,8 @@ SELECT
     ifnull((case when Sales_Unit in ('CA1','CA2','CA3') then 'CAR' else Sales_Unit end),'') as Sales_Unit,
     Calendar_Day,
     sum(ifnull(Sales_ExclTax,0)) as Sales_ExclTax,
-    sum(ifnull(Sales_Qty_SUoM,0)) as Sales_Qty_SUoM,
-    (case when sum(Sales_Qty_SUoM) = 0 then NULL else sum(Sales_ExclTax)/sum(Sales_Qty_SUoM) end) as ASP # maybe  `gcp-wow-ent-im-tbl-prod.adp_dm_masterdata_view.dim_article_site_uom_v_hist` ? for ASP regardless of whether there are sales or not.
+    sum(ifnull(Sales_Qty_SUoM,0)) as Sales_Qty_SUoM--,
+    --(case when sum(Sales_Qty_SUoM) = 0 then NULL else sum(Sales_ExclTax)/sum(Sales_Qty_SUoM) end) as ASP # maybe  `gcp-wow-ent-im-tbl-prod.adp_dm_masterdata_view.dim_article_site_uom_v_hist` ? for ASP regardless of whether there are sales or not.
     FROM  `gcp-wow-ent-im-tbl-prod.gs_allgrp_fin_data.fin_group_profit_v`
     WHERE
     SalesOrg in unnest(so) and
@@ -26,6 +90,40 @@ SELECT
     group by 1,2,3,4,5
 );
 
+
+-- ## gen price family table to attach to priceFam table later
+-- create temp table articleSales as (
+
+-- select a.*, b.ASP -- Here ASP is actually standard price not the actual sell price!!!
+
+-- from (
+
+-- SELECT
+--     ifnull(SalesOrg,'') as SalesOrg,
+--     ifnull(Site,'') as Site,
+--     ltrim(Article,'0') as Article,
+--     ifnull((case when Sales_Unit in ('CA1','CA2','CA3') then 'CAR' else Sales_Unit end),'') as Sales_Unit,
+--     Calendar_Day,
+--     sum(ifnull(Sales_ExclTax,0)) as Sales_ExclTax,
+--     sum(ifnull(Sales_Qty_SUoM,0)) as Sales_Qty_SUoM--,
+--     --(case when sum(Sales_Qty_SUoM) = 0 then NULL else sum(Sales_ExclTax)/sum(Sales_Qty_SUoM) end) as ASP # maybe  `gcp-wow-ent-im-tbl-prod.adp_dm_masterdata_view.dim_article_site_uom_v_hist` ? for ASP regardless of whether there are sales or not.
+--     FROM  `gcp-wow-ent-im-tbl-prod.gs_allgrp_fin_data.fin_group_profit_v`
+--     WHERE
+--     SalesOrg in unnest(so) and
+--     Calendar_Day between dateFrom and dateTo
+--     --Segment_Description = 'CANS - 24 PACK & OVER'
+--     group by 1,2,3,4,5
+    
+--     ) a
+    
+--     left join 
+
+--     (
+--     SELECT day,Article,	Site, max(CurrentSellPrice) as ASP
+--   FROM `gcp-wow-finance-de-lab-dev.017_map.daily_site_article_sellPrice`
+--   group by 1,2,3
+--     ) b on (a.Site=b.Site) and (a.Article=b.Article) and (a.Calendar_Day=b.day)
+-- );
 
   
     
@@ -57,17 +155,26 @@ order by soh.salesorg_id, soh.site, soh.article, soh.soh_date
 
 ## gen sohPriceFam summary table
 create temp table soh0_sales as (
-select a.*, ifnull(b.Sales_ExclTax,0) as Sales_ExclTax, ifnull(b.Sales_Qty_SUoM,0) as Sales_Qty_SUoM, b.ASP
+select a.*, ifnull(b.Sales_ExclTax,0) as Sales_ExclTax, ifnull(b.Sales_Qty_SUoM,0) as Sales_Qty_SUoM, c.ASP
 from soh0 a
 --left join articlePriceFam b on (ltrim(a.article,'0') = ltrim(b.Article,'0')) and (a.salesorg_id=b.SalesOrg)
 left join articleSales b on (a.article=b.Article) and (a.salesorg_id = b.SalesOrg) and (a.site=b.Site) and (a.article_uom=b.Sales_Unit) and (a.soh_date=b.Calendar_Day)
+
+left join 
+    (
+    SELECT day,Article,	Site, max(CurrentSellPrice) as ASP
+  FROM `gcp-wow-finance-de-lab-dev.017_map.daily_site_article_sellPrice`
+  group by 1,2,3
+    ) c on (a.site=c.Site) and (a.article=c.Article) and (a.soh_date=c.day)
+
 );
 
 create temp table soh0_articleSalesOrg as (
 select salesorg_id, article_uom, article, soh_date,
 sum(ifnull(Sales_ExclTax,0)) as Sales_ExclTax,
 sum(ifnull(Sales_Qty_SUoM,0)) as Sales_Qty_SUoM,
-(case when sum(Sales_Qty_SUoM) = 0 then NULL else sum(Sales_ExclTax)/sum(Sales_Qty_SUoM) end) as ASP,
+--(case when sum(Sales_Qty_SUoM) = 0 then NULL else sum(Sales_ExclTax)/sum(Sales_Qty_SUoM) end) as ASP,
+avg(ASP) as ASP,
 sum(stock_at_map) as stock_at_map,
 sum(stock_on_hand) as stock_on_hand,
 (case when sum(stock_on_hand) = 0 then null else sum(stock_at_map)/sum(stock_on_hand) end) as map
@@ -216,16 +323,24 @@ from d3
 )
 select *,
 (case
-when salesorg_id in ('1005', '1030') AND abs(map_diff)*stock_on_hand > 8000 then true
-when salesorg_id in ('1060') AND abs(map_diff)*stock_on_hand > 200 then true
-when salesorg_id in ('2010', '2030') AND abs(map_diff)*stock_on_hand > 800 then true
-else false end) as detected_by_existing_method,
+when map_diff is null then 'is_null' 
+when salesorg_id in ('1005', '1030') AND abs(map_diff)*stock_on_hand > 8000 then 'yes'
+when salesorg_id in ('1060') AND abs(map_diff)*stock_on_hand > 200 then 'yes'
+when salesorg_id in ('2010', '2030') AND abs(map_diff)*stock_on_hand > 800 then 'yes'
+else 'no' end) as detected_by_dollar_impact,
+
 (case
-when abs(map_spread_z)>2 and salesorg_id in ('1005', '1030') AND abs(map_diff)*stock_on_hand > 8000 then true
-when abs(map_spread_z)>2 and salesorg_id in ('1060') AND abs(map_diff)*stock_on_hand > 200 then true
-when abs(map_spread_z)>2 and salesorg_id in ('2010', '2030') AND abs(map_diff)*stock_on_hand > 800 then true
+when map_spread_z is null then 'is_null'
+when abs(map_spread_z)>2 then 'yes'
 --when abs(spread_z)>2 then true
-else false end) as detected_record_v_salesOrg_map_method
+else 'no' end) as detected_record_v_salesOrg_map_method,
+
+(case
+when asp_map_spread_z is null then 'is_null'
+when abs(asp_map_spread_z)>2 then 'yes'
+--when abs(spread_z)>2 then true
+else 'no' end) as detected_asp_map_spread_method
+
 from d4
 );
 
