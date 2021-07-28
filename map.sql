@@ -252,8 +252,8 @@ from `gcp-wow-finance-de-lab-dev.017_map.00_mapData`
 ),
 d1 as (
 select *,
-(case when map_spread_std = 0 then null else (map_spread-map_spread_ma)/map_spread_std end ) as map_spread_z,
-(case when asp_map_spread_std = 0 then null else (asp_map_spread-asp_map_spread_ma)/asp_map_spread_std end ) as asp_map_spread_z
+(case when map_spread_std = 0 then 0 else (map_spread-map_spread_ma)/map_spread_std end ) as map_spread_z,
+(case when asp_map_spread_std = 0 then 0 else (asp_map_spread-asp_map_spread_ma)/asp_map_spread_std end ) as asp_map_spread_z
 from d0
 ),
 d2 as (
