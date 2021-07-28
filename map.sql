@@ -339,7 +339,13 @@ else 'no' end) as detected_record_v_salesOrg_map_method,
 when asp_map_spread_z is null then 'is_null'
 when abs(asp_map_spread_z)>2 then 'yes'
 --when abs(spread_z)>2 then true
-else 'no' end) as detected_asp_map_spread_method
+else 'no' end) as detected_asp_map_spread_method,
+
+(case
+when (map_spread is null) or (lag_map_spread is null) then 'is_null'
+when abs(map_spread)<abs(lag_map_spread) then 'yes'
+else 'no'
+end) as detect_map_spread_shrinking #basically if MAP for site is getting closer to map for salesOrg v yesterday then this isn't really odd at all.
 
 from d4
 );
