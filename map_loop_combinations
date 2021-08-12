@@ -1,0 +1,192 @@
+declare so array<STRING>;
+DECLARE dateFrom DATE;
+DECLARE dateTo DATE;
+DECLARE i INT64 DEFAULT 0;
+declare tempString00 string;
+declare tempString01 string;
+declare tempString02 string;
+
+declare gb_list array<STRING>;
+declare gb_list_tableNames array<STRING>;
+
+
+set so = ['1030', '1005', '2010', '1060', '2030'];
+set dateTo = DATE_ADD(CURRENT_DATE("Australia/Sydney"), INTERVAL -1 DAY);
+set dateFrom = DATE_ADD(dateTo, INTERVAL -30 DAY);
+
+############################################################
+### START: create ASP table (regardless of whether there were any sales for that site article pair for that day) - excl UOM in this view
+
+CREATE TEMP FUNCTION f_date_add(d date, inc int64) AS (DATE_ADD(d, INTERVAL inc DAY));
+
+
+## gen soh summary table
+create or replace table `gcp-wow-finance-de-lab-dev.017_map.00_mapData_temp` as (
+select soh.soh_date,
+DATE_ADD(soh.soh_date, INTERVAL -1 DAY) as soh_date_lag1d,
+ifnull(soh.salesorg_id,'') as salesorg_id,
+ifnull(soh.site,'') as site,
+ifnull(soh.article,'') as article,
+ifnull(art.ArticleDescription,'') as ArticleDescription,
+
+ifnull(art_h.DepartmentDescription,'') as DepartmentDescription,
+ifnull(art_h.CategoryDescription,'') as CategoryDescription,
+ifnull(art_h.Sub_CategoryDescription,'') as Sub_CategoryDescription,
+
+--ifnull(soh.article_uom,'') as article_uom,
+--ifnull(c.Price_Family_Description, art.ArticleDescription) as Price_Family_Description,
+ifnull(soh.stock_at_map,0) as stock_at_map,
+ifnull(soh.stock_on_hand,0) as stock_on_hand,
+(case when ifnull(soh.stock_on_hand,0) = 0 then null else ifnull(soh.stock_at_map,0)/ifnull(soh.stock_on_hand,0) end) as map
+
+from
+`gcp-wow-ent-im-tbl-prod.adp_inventory_curr.article_site_soh_snapshot_daily` soh
+   left join `gcp-wow-ent-im-tbl-prod.adp_dm_masterdata_view.dim_article_v` art on (soh.Article=art.Article)
+   left join `gcp-wow-ent-im-tbl-prod.adp_dm_masterdata_view.dim_article_hierarchy_v` art_h on (soh.Article=art_h.Article) and (soh.salesorg_id=art_h.SalesOrg)
+   --left join articlePriceFam c on (ltrim(soh.article,'0') = ltrim(c.Article,'0')) and (soh.salesorg_id=c.SalesOrg)
+where soh.soh_date between dateFrom and  dateTo
+and art.Article != "ZPRD"
+ and --Site in ("1933", "3911", "4933", "5910", "1944", "2998", "3920", "1912", "1998", "1954") AND
+ salesorg_id in unnest(so)
+order by soh.salesorg_id, soh.site, soh.article, soh.soh_date
+);
+
+
+###################################
+
+CREATE TEMP FUNCTION f_jitter(m float64) AS (
+if(rand()>0.5,0.015,-0.015)*m
+);
+
+
+CREATE TEMP FUNCTION gen_sql(s string) AS (
+# s must be in 'c1,c2,c3' format. Comma separated now spaces!
+concat(
+"""
+select 
+'"""|| s ||"""'
+ as gb_var, 
+ concat(salesorg_id, '|',	site, '|',	DepartmentDescription, '|',	CategoryDescription, '|',	Sub_CategoryDescription, '|', article, '|',	ArticleDescription) as gb_val,
+ *,
+AVG( map ) OVER (PARTITION BY 
+salesorg_id,	site,	DepartmentDescription,	CategoryDescription,	Sub_CategoryDescription, article,	ArticleDescription
+ORDER BY UNIX_DATE(soh_date) RANGE BETWEEN 7 PRECEDING AND CURRENT ROW) AS map_ma,
+# add noise for sd calc
+stddev( (map+f_jitter(map)) ) OVER (PARTITION BY 
+salesorg_id,	site,	DepartmentDescription,	CategoryDescription,	Sub_CategoryDescription, article,	ArticleDescription
+ORDER BY UNIX_DATE(soh_date) RANGE BETWEEN 7 PRECEDING AND CURRENT ROW) AS map_std
+
+,
+lag(stock_at_map) over(PARTITION BY salesorg_id,	site,	DepartmentDescription,	CategoryDescription,	Sub_CategoryDescription, article,	ArticleDescription order by soh_date) as lag_stock_at_map,
+lag(stock_on_hand) over(PARTITION BY salesorg_id,	site,	DepartmentDescription,	CategoryDescription,	Sub_CategoryDescription, article,	ArticleDescription order by soh_date) as lag_stock_on_hand,
+lag(map) over(PARTITION BY salesorg_id,	site,	DepartmentDescription,	CategoryDescription,	Sub_CategoryDescription, article,	ArticleDescription order by soh_date) as lag_map
+
+from (
+select 
+""" ||
+"(case when REGEXP_CONTAINS('"||s||"', '^salesorg_id$|^salesorg_id,|,salesorg_id$|,salesorg_id,') then salesorg_id else 'ALL' end) as salesorg_id,"||
+"(case when REGEXP_CONTAINS('"||s||"', '^site$|^site,|,site$|,site,') then site else 'ALL' end) as site,"||
+"(case when REGEXP_CONTAINS('"||s||"', '^DepartmentDescription$|^DepartmentDescription,|,DepartmentDescription$|,DepartmentDescription,') then DepartmentDescription else 'ALL' end) as DepartmentDescription,"||
+"(case when REGEXP_CONTAINS('"||s||"', '^CategoryDescription$|^CategoryDescription,|,CategoryDescription$|,CategoryDescription,') then CategoryDescription else 'ALL' end) as CategoryDescription,"||
+"(case when REGEXP_CONTAINS('"||s||"', '^Sub_CategoryDescription$|^Sub_CategoryDescription,|,Sub_CategoryDescription$|,Sub_CategoryDescription,') then Sub_CategoryDescription else 'ALL' end) as Sub_CategoryDescription,"||
+"(case when REGEXP_CONTAINS('"||s||"', '^article$|^article,|,article$|,article,') then article else 'ALL' end) as article,"||
+"(case when REGEXP_CONTAINS('"||s||"', '^ArticleDescription$|^ArticleDescription,|,ArticleDescription$|,ArticleDescription,') then ArticleDescription else 'ALL' end) as ArticleDescription,"||
+"""
+soh_date,
+sum(stock_at_map) as stock_at_map,
+sum(stock_on_hand) as stock_on_hand,
+(case when ifnull(sum(stock_on_hand),0) = 0 then null else sum(stock_at_map)/sum(stock_on_hand) end) as map
+from `gcp-wow-finance-de-lab-dev.017_map.00_mapData_temp`
+group by 
+salesorg_id,	site,	DepartmentDescription,	CategoryDescription,	Sub_CategoryDescription, article,	ArticleDescription, 
+ soh_date)
+"""
+)
+);
+
+#execute immediate gen_sql('salesorg_id,DepartmentDescription');
+
+set gb_list = [
+'salesorg_id,DepartmentDescription,CategoryDescription,Sub_CategoryDescription,article,ArticleDescription',
+'salesorg_id,site,DepartmentDescription,CategoryDescription,Sub_CategoryDescription,article,ArticleDescription'
+];
+
+# make valid tableNames
+set gb_list_tableNames = (
+select array(select replace(a,',','_')
+from unnest(gb_list) a)
+);
+
+
+
+
+#################################################################################
+######################################################### START create a table for each GB
+
+#set sql_temp = "create or replace table `gcp-wow-finance-de-lab-dev.price_elasticity.PriceElastData_fit` as (";
+SET i = 0; # ensure i begins at zero.
+LOOP
+  SET i = i + 1;
+  IF i > ARRAY_LENGTH(gb_list) THEN 
+    LEAVE;
+  END IF;
+  
+  set tempString00 = gb_list_tableNames[ORDINAL(i)];
+  set tempString01 = gb_list[ORDINAL(i)];
+  # will need to pre-pend with union all all except 1st instance
+  set tempString02 = concat("create or replace table `gcp-wow-finance-de-lab-dev.017_map."|| tempString00 ||"` as ("||
+  gen_sql(tempString01)||
+  ");"
+  );
+
+  execute immediate tempString02;
+
+END LOOP;
+
+
+######################################################### END create a table for each GB
+#################################################################################
+
+
+#################################################################################
+######################################################### START create single table unioning all GB tables
+
+set tempString00 = "create or replace table `gcp-wow-finance-de-lab-dev.017_map.map_stacked_all` as (";
+SET i = 0; # ensure i begins at zero.
+LOOP
+  SET i = i + 1;
+  IF i > ARRAY_LENGTH(gb_list) THEN 
+    LEAVE;
+  END IF;
+  
+  # will need to pre-pend with union all all except 1st instance
+  set tempString01 = '';
+  
+  IF i > 1 THEN 
+    set tempString01 = ' union all ';
+  END IF;
+  #
+  
+  set tempString02 = gb_list_tableNames[ORDINAL(i)];
+  set tempString01 = concat(tempString01 || '(' ||
+                  """
+                  select *, 
+                  stock_at_map-lag_stock_at_map as stock_at_map_diff,
+                  stock_on_hand-lag_stock_on_hand as stock_on_hand_diff,
+                  map-lag_map as map_diff,
+                  (case when (map_std = 0 or map_std is null) then 0 else (map-map_ma)/map_std end ) as z_score 
+                  from `gcp-wow-finance-de-lab-dev.017_map."""||tempString02||"`"||
+                  ')');
+    
+  set tempString00 = concat(tempString00, tempString01);
+
+END LOOP;
+
+set tempString00 = concat(tempString00, ');');
+execute immediate tempString00;
+
+######################################################### END create single table unioning all GB tables
+#################################################################################
+
+
+
