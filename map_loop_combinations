@@ -20,6 +20,64 @@ set dateFrom = DATE_ADD(dateTo, INTERVAL -30 DAY);
 CREATE TEMP FUNCTION f_date_add(d date, inc int64) AS (DATE_ADD(d, INTERVAL inc DAY));
 
 
+## get ASP:
+create or replace table
+`gcp-wow-finance-de-lab-dev.017_map.daily_site_article_sellPrice` as (
+select *
+from
+(
+with 
+dateTable as (
+SELECT day
+FROM UNNEST(
+    #GENERATE_DATE_ARRAY(f_date_add(CURRENT_DATE(), -364), CURRENT_DATE(), INTERVAL 1 DAY)
+    GENERATE_DATE_ARRAY(dateFrom, dateTo, INTERVAL 1 DAY)
+) AS day
+),
+dat as (
+SELECT 
+    ltrim(Article,'0') as Article,
+    ifnull(Site,'') as Site,
+    cast(DateSellPriceStart as date) as DateSellPriceStart,
+    cast(max(CurrentSellPrice) as float64) as CurrentSellPrice
+--Article, Site, DateSellPriceStart, cast(max(CurrentSellPrice) as float64) as CurrentSellPrice
+FROM `gcp-wow-ent-im-tbl-prod.adp_dm_masterdata_view.dim_article_site_uom_v_hist` 
+where DateSellPriceStart is not null and DateSellPriceStart != ''
+group by 1,2,3
+),
+dat2 as (
+select *,
+
+ifnull(
+  f_date_add(
+  cast(lead(DateSellPriceStart) over(partition by Article, Site order by DateSellPriceStart) as DATE)
+  , -1)
+  , f_date_add(CURRENT_DATE("Australia/Sydney"), 364)#,cast('2999-01-01' as DATE)
+  )
+  as to_DateSellPriceStart
+
+from dat
+
+--where DateSellPriceStart is not null and DateSellPriceStart != ''
+
+)
+select dt.*, d.*
+--d.Article, d.Site, dt.day, max(d.CurrentSellPrice) as sell_price
+from dateTable dt, 
+dat2 d 
+where 
+d.DateSellPriceStart<=dt.day and
+d.to_DateSellPriceStart>=dt.day
+-- dt.day>=cast(d.DateSellPriceStart as date) and
+-- dt.day <= cast(d.to_DateSellPriceStart as date)
+
+--group by 1,2,3
+order by d.Article, d.Site, dt.day
+)
+
+);
+
+
 ## gen soh summary table
 create or replace table `gcp-wow-finance-de-lab-dev.017_map.00_mapData_temp` as (
 select soh.soh_date,
@@ -37,12 +95,22 @@ ifnull(art_h.Sub_CategoryDescription,'') as Sub_CategoryDescription,
 --ifnull(c.Price_Family_Description, art.ArticleDescription) as Price_Family_Description,
 ifnull(soh.stock_at_map,0) as stock_at_map,
 ifnull(soh.stock_on_hand,0) as stock_on_hand,
-(case when ifnull(soh.stock_on_hand,0) = 0 then null else ifnull(soh.stock_at_map,0)/ifnull(soh.stock_on_hand,0) end) as map
+(case when ifnull(soh.stock_on_hand,0) = 0 then null else ifnull(soh.stock_at_map,0)/ifnull(soh.stock_on_hand,0) end) as map,
+c.ASP as ASP
 
 from
 `gcp-wow-ent-im-tbl-prod.adp_inventory_curr.article_site_soh_snapshot_daily` soh
    left join `gcp-wow-ent-im-tbl-prod.adp_dm_masterdata_view.dim_article_v` art on (soh.Article=art.Article)
    left join `gcp-wow-ent-im-tbl-prod.adp_dm_masterdata_view.dim_article_hierarchy_v` art_h on (soh.Article=art_h.Article) and (soh.salesorg_id=art_h.SalesOrg)
+   
+   left join (
+   (
+    SELECT day,Article,	Site, avg(CurrentSellPrice) as ASP
+  FROM `gcp-wow-finance-de-lab-dev.017_map.daily_site_article_sellPrice`
+  group by 1,2,3
+    ) 
+   ) c on (soh.site=c.Site) and (soh.article=c.Article) and (soh.soh_date=c.day)
+   
    --left join articlePriceFam c on (ltrim(soh.article,'0') = ltrim(c.Article,'0')) and (soh.salesorg_id=c.SalesOrg)
 where soh.soh_date between dateFrom and  dateTo
 and art.Article != "ZPRD"
@@ -74,12 +142,25 @@ ORDER BY UNIX_DATE(soh_date) RANGE BETWEEN 7 PRECEDING AND CURRENT ROW) AS map_m
 # add noise for sd calc
 stddev( (map+f_jitter(map)) ) OVER (PARTITION BY 
 salesorg_id,	site,	DepartmentDescription,	CategoryDescription,	Sub_CategoryDescription, article,	ArticleDescription
-ORDER BY UNIX_DATE(soh_date) RANGE BETWEEN 7 PRECEDING AND CURRENT ROW) AS map_std
+ORDER BY UNIX_DATE(soh_date) RANGE BETWEEN 7 PRECEDING AND CURRENT ROW) AS map_std,
+
+
+
+AVG( ASP ) OVER (PARTITION BY 
+salesorg_id,	site,	DepartmentDescription,	CategoryDescription,	Sub_CategoryDescription, article,	ArticleDescription
+ORDER BY UNIX_DATE(soh_date) RANGE BETWEEN 7 PRECEDING AND CURRENT ROW) AS ASP_ma,
+# add noise for sd calc
+stddev( (ASP+f_jitter(ASP)) ) OVER (PARTITION BY 
+salesorg_id,	site,	DepartmentDescription,	CategoryDescription,	Sub_CategoryDescription, article,	ArticleDescription
+ORDER BY UNIX_DATE(soh_date) RANGE BETWEEN 7 PRECEDING AND CURRENT ROW) AS ASP_std
+
 
 ,
 lag(stock_at_map) over(PARTITION BY salesorg_id,	site,	DepartmentDescription,	CategoryDescription,	Sub_CategoryDescription, article,	ArticleDescription order by soh_date) as lag_stock_at_map,
 lag(stock_on_hand) over(PARTITION BY salesorg_id,	site,	DepartmentDescription,	CategoryDescription,	Sub_CategoryDescription, article,	ArticleDescription order by soh_date) as lag_stock_on_hand,
-lag(map) over(PARTITION BY salesorg_id,	site,	DepartmentDescription,	CategoryDescription,	Sub_CategoryDescription, article,	ArticleDescription order by soh_date) as lag_map
+lag(map) over(PARTITION BY salesorg_id,	site,	DepartmentDescription,	CategoryDescription,	Sub_CategoryDescription, article,	ArticleDescription order by soh_date) as lag_map,
+
+lag(ASP) over(PARTITION BY salesorg_id,	site,	DepartmentDescription,	CategoryDescription,	Sub_CategoryDescription, article,	ArticleDescription order by soh_date) as lag_ASP
 
 from (
 select 
@@ -95,7 +176,8 @@ select
 soh_date,
 sum(stock_at_map) as stock_at_map,
 sum(stock_on_hand) as stock_on_hand,
-(case when ifnull(sum(stock_on_hand),0) = 0 then null else sum(stock_at_map)/sum(stock_on_hand) end) as map
+(case when ifnull(sum(stock_on_hand),0) = 0 then null else sum(stock_at_map)/sum(stock_on_hand) end) as map,
+avg(ASP) as ASP
 from `gcp-wow-finance-de-lab-dev.017_map.00_mapData_temp`
 group by 
 salesorg_id,	site,	DepartmentDescription,	CategoryDescription,	Sub_CategoryDescription, article,	ArticleDescription, 
@@ -174,7 +256,9 @@ LOOP
                   stock_at_map-lag_stock_at_map as stock_at_map_diff,
                   stock_on_hand-lag_stock_on_hand as stock_on_hand_diff,
                   map-lag_map as map_diff,
-                  (case when (map_std = 0 or map_std is null) then 0 else (map-map_ma)/map_std end ) as z_score 
+                  ASP-lag_ASP as ASP_diff,
+                  (case when (map_std = 0 or map_std is null) then 0 else (map-map_ma)/map_std end ) as map_z_score ,
+                  (case when (ASP_std = 0 or ASP_std is null) then 0 else (ASP-ASP_ma)/ASP_std end ) as ASP_z_score 
                   from `gcp-wow-finance-de-lab-dev.017_map."""||tempString02||"`"||
                   ')');
     
