@@ -84,6 +84,7 @@ select soh.soh_date,
 DATE_ADD(soh.soh_date, INTERVAL -1 DAY) as soh_date_lag1d,
 ifnull(soh.salesorg_id,'') as salesorg_id,
 ifnull(soh.site,'') as site,
+ifnull(ss.State,'') as State,
 ifnull(soh.article,'') as article,
 ifnull(art.ArticleDescription,'') as ArticleDescription,
 
@@ -110,6 +111,10 @@ from
   group by 1,2,3
     ) 
    ) c on (soh.site=c.Site) and (soh.article=c.Article) and (soh.soh_date=c.day)
+
+   left join 
+`gcp-wow-ent-im-tbl-prod.adp_dm_masterdata_view.dim_site_v` ss
+on (soh.salesorg_id=ss.SalesOrganisation) and (soh.site=ss.Site)
    
    --left join articlePriceFam c on (ltrim(soh.article,'0') = ltrim(c.Article,'0')) and (soh.salesorg_id=c.SalesOrg)
 where soh.soh_date between dateFrom and  dateTo
@@ -123,7 +128,7 @@ order by soh.salesorg_id, soh.site, soh.article, soh.soh_date
 ###################################
 
 CREATE TEMP FUNCTION f_jitter(m float64) AS (
-if(rand()>0.5,0.015,-0.015)*m
+if(rand()>0.5,0.005,-0.005)*m
 );
 
 
@@ -134,38 +139,39 @@ concat(
 select 
 '"""|| s ||"""'
  as gb_var, 
- concat(salesorg_id, '|',	site, '|',	DepartmentDescription, '|',	CategoryDescription, '|',	Sub_CategoryDescription, '|', article, '|',	ArticleDescription) as gb_val,
+ concat(salesorg_id, '|', State, '|', 	site, '|',	DepartmentDescription, '|',	CategoryDescription, '|',	Sub_CategoryDescription, '|', article, '|',	ArticleDescription) as gb_val,
  *,
 AVG( map ) OVER (PARTITION BY 
-salesorg_id,	site,	DepartmentDescription,	CategoryDescription,	Sub_CategoryDescription, article,	ArticleDescription
+salesorg_id,	State, site,	DepartmentDescription,	CategoryDescription,	Sub_CategoryDescription, article,	ArticleDescription
 ORDER BY UNIX_DATE(soh_date) RANGE BETWEEN 7 PRECEDING AND CURRENT ROW) AS map_ma,
 # add noise for sd calc
 stddev( (map+f_jitter(map)) ) OVER (PARTITION BY 
-salesorg_id,	site,	DepartmentDescription,	CategoryDescription,	Sub_CategoryDescription, article,	ArticleDescription
+salesorg_id,	State, site,	DepartmentDescription,	CategoryDescription,	Sub_CategoryDescription, article,	ArticleDescription
 ORDER BY UNIX_DATE(soh_date) RANGE BETWEEN 7 PRECEDING AND CURRENT ROW) AS map_std,
 
 
 
 AVG( ASP ) OVER (PARTITION BY 
-salesorg_id,	site,	DepartmentDescription,	CategoryDescription,	Sub_CategoryDescription, article,	ArticleDescription
+salesorg_id,	State, site,	DepartmentDescription,	CategoryDescription,	Sub_CategoryDescription, article,	ArticleDescription
 ORDER BY UNIX_DATE(soh_date) RANGE BETWEEN 7 PRECEDING AND CURRENT ROW) AS ASP_ma,
 # add noise for sd calc
 stddev( (ASP+f_jitter(ASP)) ) OVER (PARTITION BY 
-salesorg_id,	site,	DepartmentDescription,	CategoryDescription,	Sub_CategoryDescription, article,	ArticleDescription
+salesorg_id,	State, site,	DepartmentDescription,	CategoryDescription,	Sub_CategoryDescription, article,	ArticleDescription
 ORDER BY UNIX_DATE(soh_date) RANGE BETWEEN 7 PRECEDING AND CURRENT ROW) AS ASP_std
 
 
 ,
-lag(stock_at_map) over(PARTITION BY salesorg_id,	site,	DepartmentDescription,	CategoryDescription,	Sub_CategoryDescription, article,	ArticleDescription order by soh_date) as lag_stock_at_map,
-lag(stock_on_hand) over(PARTITION BY salesorg_id,	site,	DepartmentDescription,	CategoryDescription,	Sub_CategoryDescription, article,	ArticleDescription order by soh_date) as lag_stock_on_hand,
-lag(map) over(PARTITION BY salesorg_id,	site,	DepartmentDescription,	CategoryDescription,	Sub_CategoryDescription, article,	ArticleDescription order by soh_date) as lag_map,
+lag(stock_at_map) over(PARTITION BY salesorg_id,	State, site,	DepartmentDescription,	CategoryDescription,	Sub_CategoryDescription, article,	ArticleDescription order by soh_date) as lag_stock_at_map,
+lag(stock_on_hand) over(PARTITION BY salesorg_id,	State, site,	DepartmentDescription,	CategoryDescription,	Sub_CategoryDescription, article,	ArticleDescription order by soh_date) as lag_stock_on_hand,
+lag(map) over(PARTITION BY salesorg_id,	State, site,	DepartmentDescription,	CategoryDescription,	Sub_CategoryDescription, article,	ArticleDescription order by soh_date) as lag_map,
 
-lag(ASP) over(PARTITION BY salesorg_id,	site,	DepartmentDescription,	CategoryDescription,	Sub_CategoryDescription, article,	ArticleDescription order by soh_date) as lag_ASP
+lag(ASP) over(PARTITION BY salesorg_id,	State, site,	DepartmentDescription,	CategoryDescription,	Sub_CategoryDescription, article,	ArticleDescription order by soh_date) as lag_ASP
 
 from (
 select 
 """ ||
 "(case when REGEXP_CONTAINS('"||s||"', '^salesorg_id$|^salesorg_id,|,salesorg_id$|,salesorg_id,') then salesorg_id else 'ALL' end) as salesorg_id,"||
+"(case when REGEXP_CONTAINS('"||s||"', '^State$|^State,|,State$|,State,') then State else 'ALL' end) as State,"||
 "(case when REGEXP_CONTAINS('"||s||"', '^site$|^site,|,site$|,site,') then site else 'ALL' end) as site,"||
 "(case when REGEXP_CONTAINS('"||s||"', '^DepartmentDescription$|^DepartmentDescription,|,DepartmentDescription$|,DepartmentDescription,') then DepartmentDescription else 'ALL' end) as DepartmentDescription,"||
 "(case when REGEXP_CONTAINS('"||s||"', '^CategoryDescription$|^CategoryDescription,|,CategoryDescription$|,CategoryDescription,') then CategoryDescription else 'ALL' end) as CategoryDescription,"||
@@ -180,7 +186,7 @@ sum(stock_on_hand) as stock_on_hand,
 avg(ASP) as ASP
 from `gcp-wow-finance-de-lab-dev.017_map.00_mapData_temp`
 group by 
-salesorg_id,	site,	DepartmentDescription,	CategoryDescription,	Sub_CategoryDescription, article,	ArticleDescription, 
+salesorg_id,	State, site,	DepartmentDescription,	CategoryDescription,	Sub_CategoryDescription, article,	ArticleDescription, 
  soh_date)
 """
 )
@@ -190,7 +196,8 @@ salesorg_id,	site,	DepartmentDescription,	CategoryDescription,	Sub_CategoryDescr
 
 set gb_list = [
 'salesorg_id,DepartmentDescription,CategoryDescription,Sub_CategoryDescription,article,ArticleDescription',
-'salesorg_id,site,DepartmentDescription,CategoryDescription,Sub_CategoryDescription,article,ArticleDescription'
+'salesorg_id,State,DepartmentDescription,CategoryDescription,Sub_CategoryDescription,article,ArticleDescription',
+'salesorg_id,State,site,DepartmentDescription,CategoryDescription,Sub_CategoryDescription,article,ArticleDescription'
 ];
 
 # make valid tableNames
@@ -257,6 +264,10 @@ LOOP
                   stock_on_hand-lag_stock_on_hand as stock_on_hand_diff,
                   map-lag_map as map_diff,
                   ASP-lag_ASP as ASP_diff,
+                  
+                  (case when lag_map = 0 then null else map/lag_map-1 end) as map_perc_diff,
+                  (case when lag_asp = 0 then null else asp/lag_asp-1 end) as ASP_perc_diff,
+                  
                   (case when (map_std = 0 or map_std is null) then 0 else (map-map_ma)/map_std end ) as map_z_score ,
                   (case when (ASP_std = 0 or ASP_std is null) then 0 else (ASP-ASP_ma)/ASP_std end ) as ASP_z_score 
                   from `gcp-wow-finance-de-lab-dev.017_map."""||tempString02||"`"||
@@ -272,5 +283,27 @@ execute immediate tempString00;
 ######################################################### END create single table unioning all GB tables
 #################################################################################
 
+#################################################################################
+######################################################### START gen tableau table
 
+create or replace table `gcp-wow-finance-de-lab-dev.017_map.sig_only_4tableau` as (
+select a.*
+FROM `gcp-wow-finance-de-lab-dev.017_map.map_stacked_all` a
+inner join 
+(
+select distinct salesorg_id, site,article
+from (
+SELECT salesorg_id, site,article, soh_date,
+sum(abs(stock_on_hand*map_diff)) as simpleAbsDollarImpact
+FROM `gcp-wow-finance-de-lab-dev.017_map.map_stacked_all`
+where abs(map_z_score) > 2 and
+gb_var = 'salesorg_id,State,site,DepartmentDescription,CategoryDescription,Sub_CategoryDescription,article,ArticleDescription'
+group by 1,2,3,4
+having simpleAbsDollarImpact > 200
+)
+) b
+on (a.salesorg_id=b.salesorg_id) and (a.article=b.article) and (a.site=b.site)
+);
 
+######################################################### END gen tableau table
+#################################################################################
