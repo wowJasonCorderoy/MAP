@@ -284,11 +284,27 @@ execute immediate tempString00;
 #################################################################################
 
 #################################################################################
-######################################################### START add distribution channel to main table
+######################################################### START add distribution channel and bseg postings to main table
+
+## gen daily map bseg posting summary
+create or replace table `gcp-wow-finance-de-lab-dev.017_map.bseg_postings` as (
+select salesorg_id,  D_Site, D_Article_no,
+H_Posting_Date,
+sum(case when D_SHKZG_Debit_Credit_Ind = 'S' then D_Amount_in_LC else 0 end)-sum(case when D_SHKZG_Debit_Credit_Ind = 'H' then D_Amount_in_LC else 0 end) as bseg_Amount
+from
+gcp-wow-ent-im-tbl-prod.gs_bseg_mseg_rawdata.bkpf_bseg_accounting_doc_v
+where D_GL = "0000413160"
+AND H_Document_Type = "PR"
+and lower(H_USNAM_User_name) not like '%batch%'
+group by 1,2,3,4
+);
+
+
+## add dist channel and map posting onto main table
 
 create or replace table `gcp-wow-finance-de-lab-dev.017_map.map_stacked_all` as (
 
-SELECT a.*, b.DistributionChannel
+SELECT a.*, b.DistributionChannel, c.bseg_Amount
 FROM `gcp-wow-finance-de-lab-dev.017_map.map_stacked_all` a
 left join
 (
@@ -297,9 +313,12 @@ from `gcp-wow-ent-im-tbl-prod.adp_dm_masterdata_view.dim_site_v`
 ) b
 on (a.site =b.Site) and (a.salesorg_id =b.SalesOrganisation)
 
+left join `gcp-wow-finance-de-lab-dev.017_map.bseg_postings` c
+on (a.salesorg_id=c.salesorg_id) and (a.site=c.D_Site) and (a.article=c.D_Article_no) and (a.soh_date=c.H_Posting_Date)
+
 );
 
-######################################################### END add distribution channel to main table
+######################################################### END add distribution channel and bseg postings to main table
 #################################################################################
 
 #################################################################################
