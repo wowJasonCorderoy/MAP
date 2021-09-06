@@ -304,7 +304,7 @@ group by 1,2,3,4
 
 create or replace table `gcp-wow-finance-de-lab-dev.017_map.map_stacked_all` as (
 
-SELECT a.*, b.DistributionChannel, c.bseg_Amount
+SELECT a.*, b.DistributionChannel, (case when c.bseg_Amount is null then 0 else c.bseg_Amount end) as bseg_Amount
 FROM `gcp-wow-finance-de-lab-dev.017_map.map_stacked_all` a
 left join
 (
