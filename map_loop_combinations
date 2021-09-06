@@ -284,6 +284,25 @@ execute immediate tempString00;
 #################################################################################
 
 #################################################################################
+######################################################### START add distribution channel to main table
+
+create or replace table `gcp-wow-finance-de-lab-dev.017_map.map_stacked_all` as (
+
+SELECT a.*, b.DistributionChannel
+FROM `gcp-wow-finance-de-lab-dev.017_map.map_stacked_all` a
+left join
+(
+select distinct SalesOrganisation, Site, DistributionChannel
+from `gcp-wow-ent-im-tbl-prod.adp_dm_masterdata_view.dim_site_v`
+) b
+on (a.site =b.Site) and (a.salesorg_id =b.SalesOrganisation)
+
+);
+
+######################################################### END add distribution channel to main table
+#################################################################################
+
+#################################################################################
 ######################################################### START gen tableau table
 
 create or replace table `gcp-wow-finance-de-lab-dev.017_map.sig_only_4tableau` as (
@@ -299,7 +318,7 @@ FROM `gcp-wow-finance-de-lab-dev.017_map.map_stacked_all`
 where abs(map_z_score) > 2 and
 gb_var = 'salesorg_id,State,site,DepartmentDescription,CategoryDescription,Sub_CategoryDescription,article,ArticleDescription'
 group by 1,2,3,4
-having simpleAbsDollarImpact > 200
+having simpleAbsDollarImpact > 100
 )
 ) b
 on (a.salesorg_id=b.salesorg_id) and (a.article=b.article) and (a.site=b.site)
