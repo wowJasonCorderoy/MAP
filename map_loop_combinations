@@ -293,7 +293,7 @@ H_Posting_Date,
 sum(case when D_SHKZG_Debit_Credit_Ind = 'S' then D_Amount_in_LC else 0 end)-sum(case when D_SHKZG_Debit_Credit_Ind = 'H' then D_Amount_in_LC else 0 end) as bseg_Amount
 from
 gcp-wow-ent-im-tbl-prod.gs_bseg_mseg_rawdata.bkpf_bseg_accounting_doc_v
-where D_GL = "0000413160"
+where D_GL in ("0000413160", "0000423240")
 AND H_Document_Type = "PR"
 and lower(H_USNAM_User_name) not like '%batch%'
 group by 1,2,3,4
@@ -320,6 +320,7 @@ on (a.salesorg_id=c.salesorg_id) and (a.site=c.D_Site) and (a.article=c.D_Articl
 
 ######################################################### END add distribution channel and bseg postings to main table
 #################################################################################
+
 
 #################################################################################
 ######################################################### START gen tableau table
