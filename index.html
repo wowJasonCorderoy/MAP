@@ -1,0 +1,170 @@
+<!DOCTYPE html>
+<html>
+
+<head>
+	<title>Basic Embed</title>
+
+	<script type="text/javascript" src="https://tableau.woolworths.com.au/javascripts/api/tableau-2.min.js"></script>
+	<script type="text/javascript" src="./Code.gs"></script>
+	<script type="text/javascript">
+		var viz, sheet, table;
+
+// START convert tableau data and columns to single json
+//#####################################################
+// tableau column data to array
+function col2Array(dat) {
+  // values function didn't exist so replaced map solution with loop solution
+  //return values(dat).map((v) => { return v['$0']['$1']; });
+
+  var l = []
+  for(key in dat){
+      l.push(dat[key]['$0']['$1'])
+  }
+  return l
+
+}
+
+// tableau data values to array
+function values2Array(dat) {
+  // values function didn't exist so replaced map solution with loop solution
+  //return values(dat).map((v) => v.map((x) => x['value']));
+  var l = []
+  for(key in dat){
+      l.push(dat[key].map((x) => x['value']))
+  }
+  return l
+}
+
+function convert_tableau_to_json(colDat, valDat) {
+  var colArray = col2Array(colDat);
+  var valArray = values2Array(valDat);
+
+  // create dict of col:value pairs.
+  var cols2Keep = ['soh_date', 'article', 'site', 'salesorg_id'];
+  var tempObj = Object.create(null);
+  var obj = Object.create(null);
+  for (i = 0; i < valArray.length; i++) {
+    obj[i] = {};
+    //colArray.forEach((e, d) => obj[i][e] = valArray[i][d]);
+    colArray.forEach(function (e, d) {
+      if (cols2Keep.includes(e)) {
+        obj[i][e] = valArray[i][d]
+      }
+    });
+  }
+
+  var dat_dict = obj;
+  console.log(dat_dict);
+  //now put into array so we get [{...},{...}] from {"0":{...},"1":{...}}
+  var dat_array = new Array;
+  for (var key in dat_dict) {
+    dat_array.push(dat_dict[key]);
+  }
+
+  return dat_array;
+
+}
+
+// END convert tableau data and columns to single json
+//#####################################################
+
+
+    function initViz() {
+            var containerDiv = document.getElementById("vizContainer"),
+                url = "https://tableau.woolworths.com.au/t/Finance/views/MAPAnomalyDetectiondashboard/MAPAnomalyDetection",
+                options = {
+                    hideTabs: true,
+                    onFirstInteractive: function () {
+                        console.log("Run this code when the viz has finished loading.");
+                        // document.getElementById('getData').disabled = false;
+                    }
+                };
+
+            viz = new tableau.Viz(containerDiv, url, options);
+            // Create a viz object and embed it in the container div.
+        }
+
+
+        
+        function getUnderlyingData(){
+                sheet = viz.getWorkbook().getActiveSheet().getWorksheets().get("step_02_map");
+
+                options = {
+                    maxRows: 0, // Max rows to return. Use 0 to return all rows
+                    ignoreAliases: false,
+                    ignoreSelection: false,
+                    includeAllColumns: true
+                };
+
+sheet.getUnderlyingTablesAsync().then(tables => {
+	        // Get the first logical table and use that
+		return sheet.getUnderlyingTableDataAsync(tables[0].getTableId(), options).then(dataTable => {
+      var columnDat = dataTable.getColumns();
+      var tableDat = dataTable.getData();
+      var currentData = convert_tableau_to_json(colDat=columnDat, valDat=tableDat);
+
+      var tgt = document.getElementById("dataTarget");
+      //tgt.innerHTML = "<h4>UnderlyingTableData:</h4><p>" + JSON.stringify( dataTable.getData() ) + "</p>";
+      //tgt.innerHTML = "<h4>UnderlyingTableData:</h4><p>" + JSON.stringify( currentData ) + "</p>";
+      tgt.innerHTML = JSON.stringify( currentData );
+
+      return currentData;
+               });
+         });
+     }
+
+  function pushToBQ_(){
+    var proceed = confirm("Are you sure you want to proceed? Doing so will remove this data from the report: "+document.getElementById("dataTarget").innerHTML);
+if (proceed) {
+    console.log('pushToBQ_ running');
+    // google.script.run.jsonFileToBQ();
+    //var cd = getUnderlyingData();
+    var cd = JSON.parse( document.getElementById("dataTarget").innerHTML );
+    console.log('getUnderlyingData ran');
+    console.log(cd);
+      google.script.run.jsonFileToBQ(data=cd, 
+     tableReference = {
+      projectId: "gcp-wow-finance-de-lab-dev",
+      datasetId: "017_map",
+      tableId: "map_ignore_records"
+    });
+    console.log('google.script.run.jsonFileToBQ ran');
+} else {
+  alert('No changes pushed.')
+}
+  }
+
+
+   function RefreshViz(){
+    
+    viz.refreshDataAsync();
+    }
+
+
+
+	</script>
+</head>
+
+<body onload="initViz();">
+	<h1>MAP Embedded</h1>
+	<button id="getData" onclick="getUnderlyingData()" class="btn">Show DATA</button>
+	<br></br>
+  <button id="testButton" onclick="pushToBQ_()" class="btn">remove DATA from report (push to bq)</button>
+	<br></br>
+  <button id="refreshData" onclick="RefreshViz()" class="btn">refresh viz</button>
+	<br></br>
+
+  
+	<div id="vizContainer" style="width:800px; height:700px;"></div>
+  <br></br>
+  <br></br>
+  <br></br>
+  <br></br>
+  <br></br>
+  <br></br>
+  <br></br>
+  <br></br>
+	<div id="dataTarget"></div>
+</body>
+
+</html>
