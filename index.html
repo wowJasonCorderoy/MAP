@@ -86,7 +86,11 @@ function convert_tableau_to_json(colDat, valDat) {
 
 
         
-        function getUnderlyingData(){
+        async function getUnderlyingData(){
+
+return new Promise(resolve => {
+  setTimeout(() => {
+
                 sheet = viz.getWorkbook().getActiveSheet().getWorksheets().get("step_02_map");
 
                 options = {
@@ -111,15 +115,35 @@ sheet.getUnderlyingTablesAsync().then(tables => {
       return currentData;
                });
          });
+         
+         resolve('resolved');
+    }, 0);
+})
+
      }
 
-  function pushToBQ_(){
+function sleep(ms) {
+  return new Promise(resolve => setTimeout(resolve, ms));
+}
+
+
+  async function pushToBQ_(){
+    document.getElementById("dataTarget").innerHTML = '';
+    var iith = 0;
+    while(document.getElementById("dataTarget").innerHTML === ''){
+    await getUnderlyingData();
+    await sleep(5000);
+    iith += 1;
+    }
+    console.log(iith);
     var proceed = confirm("Are you sure you want to proceed? Doing so will remove this data from the report: "+document.getElementById("dataTarget").innerHTML);
 if (proceed) {
     console.log('pushToBQ_ running');
     // google.script.run.jsonFileToBQ();
     //var cd = getUnderlyingData();
+    
     var cd = JSON.parse( document.getElementById("dataTarget").innerHTML );
+
     console.log('getUnderlyingData ran');
     console.log(cd);
       google.script.run.jsonFileToBQ(data=cd, 
@@ -129,6 +153,9 @@ if (proceed) {
       tableId: "map_ignore_records"
     });
     console.log('google.script.run.jsonFileToBQ ran');
+
+    viz.refreshDataAsync();
+
 } else {
   alert('No changes pushed.')
 }
