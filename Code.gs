@@ -227,5 +227,10 @@ for(var key in dat_dict) {
   dat_array.push(dat_dict[key]);
 }
 
+// Include datetime column
+for(i=0;i<dat_array.length;i++){
+    dat_array[i]['posting_dt'] = new Date().toUTCString();
+}
+
 
 }
