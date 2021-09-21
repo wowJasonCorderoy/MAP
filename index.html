@@ -61,6 +61,18 @@ function convert_tableau_to_json(colDat, valDat) {
     dat_array.push(dat_dict[key]);
   }
 
+  // Include datetime column
+for(i=0;i<dat_array.length;i++){
+    dat_array[i]['posting_dt'] = new Date().toISOString();
+}
+
+  // Include dropdown selections and description string
+for(i=0;i<dat_array.length;i++){
+    dat_array[i]['resolution_description'] = document.getElementById("dd_res").value;
+    dat_array[i]['adjustment_description'] = document.getElementById("dd_adj").value;
+    dat_array[i]['comment'] = document.getElementById("t_desc").value;
+}
+
   return dat_array;
 
 }
@@ -128,6 +140,22 @@ function sleep(ms) {
 
 
   async function pushToBQ_(){
+
+    if(document.getElementById("dd_res").value === 'Please Select'){
+      alert('must select resolved or unresolved');
+      return
+    }
+
+    if(document.getElementById("dd_adj").value === 'Please Select'){
+      alert('must select adjustment type');
+      return
+    }
+
+    if(document.getElementById("t_desc").value === ''){
+      alert('must include a description');
+      return
+    }
+
     document.getElementById("dataTarget").innerHTML = '';
     var iith = 0;
     while(document.getElementById("dataTarget").innerHTML === ''){
@@ -153,8 +181,14 @@ if (proceed) {
       tableId: "map_ignore_records"
     });
     console.log('google.script.run.jsonFileToBQ ran');
-
+    
+    document.getElementById("dataTarget").innerHTML = '';
     viz.refreshDataAsync();
+
+    document.getElementById("dd_res").value = 'Please Select'
+    document.getElementById("dd_adj").value = 'Please Select'
+    document.getElementById("t_desc").value = ''
+    
 
 } else {
   alert('No changes pushed.')
@@ -168,19 +202,30 @@ if (proceed) {
     }
 
 
-
 	</script>
 </head>
 
 <body onload="initViz();">
 	<h1>MAP Embedded</h1>
-	<button id="getData" onclick="getUnderlyingData()" class="btn">Show DATA</button>
-	<br></br>
-  <button id="testButton" onclick="pushToBQ_()" class="btn">remove DATA from report (push to bq)</button>
-	<br></br>
-  <button id="refreshData" onclick="RefreshViz()" class="btn">refresh viz</button>
-	<br></br>
 
+  <select style="width: 150px" name="dd_res" id="dd_res">
+  <option selected="">Please Select</option>
+  <option>Resolved</option>
+  <option>Unresolved</option>
+</select>
+
+<select style="width: 180px" name="dd_adj" id="dd_adj">
+  <option selected="">Please Select</option>
+  <option>Adjustment Required</option>
+  <option>No Adjustment Required</option>
+  <option>Do not know</option>
+</select>
+
+<textarea id="t_desc" name="t_desc" rows="4" cols="50" placeholder="Enter a description here..."></textarea>
+
+  <button id="b_pushToBQ_" onclick="pushToBQ_()" class="btn">Make adjustment</button>
+	<br></br>
+ 
   
 	<div id="vizContainer" style="width:800px; height:700px;"></div>
   <br></br>
