@@ -12,7 +12,7 @@ declare gb_list_tableNames array<STRING>;
 
 set so = ['1030', '1005', '2010', '1060', '2030'];
 set dateTo = DATE_ADD(CURRENT_DATE("Australia/Sydney"), INTERVAL -1 DAY);
-set dateFrom = DATE_ADD(dateTo, INTERVAL -30 DAY);
+set dateFrom = DATE_ADD(dateTo, INTERVAL -37 DAY);
 
 ############################################################
 ### START: create ASP table (regardless of whether there were any sales for that site article pair for that day) - excl UOM in this view
@@ -93,6 +93,7 @@ ifnull(art_h.CategoryDescription,'') as CategoryDescription,
 ifnull(art_h.Sub_CategoryDescription,'') as Sub_CategoryDescription,
 
 --ifnull(soh.article_uom,'') as article_uom,
+ifnull(art.SalesUoM,'') as article_uom,
 --ifnull(c.Price_Family_Description, art.ArticleDescription) as Price_Family_Description,
 ifnull(soh.stock_at_map,0) as stock_at_map,
 ifnull(soh.stock_on_hand,0) as stock_on_hand,
@@ -139,33 +140,33 @@ concat(
 select 
 '"""|| s ||"""'
  as gb_var, 
- concat(salesorg_id, '|', State, '|', 	site, '|',	DepartmentDescription, '|',	CategoryDescription, '|',	Sub_CategoryDescription, '|', article, '|',	ArticleDescription) as gb_val,
+ concat(salesorg_id, '|', State, '|', 	site, '|',	DepartmentDescription, '|',	CategoryDescription, '|',	Sub_CategoryDescription, '|', article, '|',	ArticleDescription, '|', article_uom) as gb_val,
  *,
 AVG( map ) OVER (PARTITION BY 
-salesorg_id,	State, site,	DepartmentDescription,	CategoryDescription,	Sub_CategoryDescription, article,	ArticleDescription
+salesorg_id,	State, site,	DepartmentDescription,	CategoryDescription,	Sub_CategoryDescription, article,	ArticleDescription, article_uom
 ORDER BY UNIX_DATE(soh_date) RANGE BETWEEN 7 PRECEDING AND CURRENT ROW) AS map_ma,
 # add noise for sd calc
 stddev( (map+f_jitter(map)) ) OVER (PARTITION BY 
-salesorg_id,	State, site,	DepartmentDescription,	CategoryDescription,	Sub_CategoryDescription, article,	ArticleDescription
+salesorg_id,	State, site,	DepartmentDescription,	CategoryDescription,	Sub_CategoryDescription, article,	ArticleDescription, article_uom
 ORDER BY UNIX_DATE(soh_date) RANGE BETWEEN 7 PRECEDING AND CURRENT ROW) AS map_std,
 
 
 
 AVG( ASP ) OVER (PARTITION BY 
-salesorg_id,	State, site,	DepartmentDescription,	CategoryDescription,	Sub_CategoryDescription, article,	ArticleDescription
+salesorg_id,	State, site,	DepartmentDescription,	CategoryDescription,	Sub_CategoryDescription, article,	ArticleDescription, article_uom
 ORDER BY UNIX_DATE(soh_date) RANGE BETWEEN 7 PRECEDING AND CURRENT ROW) AS ASP_ma,
 # add noise for sd calc
 stddev( (ASP+f_jitter(ASP)) ) OVER (PARTITION BY 
-salesorg_id,	State, site,	DepartmentDescription,	CategoryDescription,	Sub_CategoryDescription, article,	ArticleDescription
+salesorg_id,	State, site,	DepartmentDescription,	CategoryDescription,	Sub_CategoryDescription, article,	ArticleDescription, article_uom
 ORDER BY UNIX_DATE(soh_date) RANGE BETWEEN 7 PRECEDING AND CURRENT ROW) AS ASP_std
 
 
 ,
-lag(stock_at_map) over(PARTITION BY salesorg_id,	State, site,	DepartmentDescription,	CategoryDescription,	Sub_CategoryDescription, article,	ArticleDescription order by soh_date) as lag_stock_at_map,
-lag(stock_on_hand) over(PARTITION BY salesorg_id,	State, site,	DepartmentDescription,	CategoryDescription,	Sub_CategoryDescription, article,	ArticleDescription order by soh_date) as lag_stock_on_hand,
-lag(map) over(PARTITION BY salesorg_id,	State, site,	DepartmentDescription,	CategoryDescription,	Sub_CategoryDescription, article,	ArticleDescription order by soh_date) as lag_map,
+lag(stock_at_map) over(PARTITION BY salesorg_id,	State, site,	DepartmentDescription,	CategoryDescription,	Sub_CategoryDescription, article,	ArticleDescription, article_uom order by soh_date) as lag_stock_at_map,
+lag(stock_on_hand) over(PARTITION BY salesorg_id,	State, site,	DepartmentDescription,	CategoryDescription,	Sub_CategoryDescription, article,	ArticleDescription, article_uom order by soh_date) as lag_stock_on_hand,
+lag(map) over(PARTITION BY salesorg_id,	State, site,	DepartmentDescription,	CategoryDescription,	Sub_CategoryDescription, article,	ArticleDescription, article_uom order by soh_date) as lag_map,
 
-lag(ASP) over(PARTITION BY salesorg_id,	State, site,	DepartmentDescription,	CategoryDescription,	Sub_CategoryDescription, article,	ArticleDescription order by soh_date) as lag_ASP
+lag(ASP) over(PARTITION BY salesorg_id,	State, site,	DepartmentDescription,	CategoryDescription,	Sub_CategoryDescription, article,	ArticleDescription, article_uom order by soh_date) as lag_ASP
 
 from (
 select 
@@ -178,6 +179,7 @@ select
 "(case when REGEXP_CONTAINS('"||s||"', '^Sub_CategoryDescription$|^Sub_CategoryDescription,|,Sub_CategoryDescription$|,Sub_CategoryDescription,') then Sub_CategoryDescription else 'ALL' end) as Sub_CategoryDescription,"||
 "(case when REGEXP_CONTAINS('"||s||"', '^article$|^article,|,article$|,article,') then article else 'ALL' end) as article,"||
 "(case when REGEXP_CONTAINS('"||s||"', '^ArticleDescription$|^ArticleDescription,|,ArticleDescription$|,ArticleDescription,') then ArticleDescription else 'ALL' end) as ArticleDescription,"||
+"(case when REGEXP_CONTAINS('"||s||"', '^article_uom$|^article_uom,|,article_uom$|,article_uom,') then article_uom else 'ALL' end) as article_uom,"||
 """
 soh_date,
 sum(stock_at_map) as stock_at_map,
@@ -186,7 +188,7 @@ sum(stock_on_hand) as stock_on_hand,
 avg(ASP) as ASP
 from `gcp-wow-finance-de-lab-dev.017_map.00_mapData_temp`
 group by 
-salesorg_id,	State, site,	DepartmentDescription,	CategoryDescription,	Sub_CategoryDescription, article,	ArticleDescription, 
+salesorg_id,	State, site,	DepartmentDescription,	CategoryDescription,	Sub_CategoryDescription, article,	ArticleDescription, article_uom,
  soh_date)
 """
 )
@@ -195,9 +197,9 @@ salesorg_id,	State, site,	DepartmentDescription,	CategoryDescription,	Sub_Catego
 #execute immediate gen_sql('salesorg_id,DepartmentDescription');
 
 set gb_list = [
-'salesorg_id,DepartmentDescription,CategoryDescription,Sub_CategoryDescription,article,ArticleDescription',
-'salesorg_id,State,DepartmentDescription,CategoryDescription,Sub_CategoryDescription,article,ArticleDescription',
-'salesorg_id,State,site,DepartmentDescription,CategoryDescription,Sub_CategoryDescription,article,ArticleDescription'
+'salesorg_id,DepartmentDescription,CategoryDescription,Sub_CategoryDescription,article,ArticleDescription,article_uom',
+'salesorg_id,State,DepartmentDescription,CategoryDescription,Sub_CategoryDescription,article,ArticleDescription,article_uom',
+'salesorg_id,State,site,DepartmentDescription,CategoryDescription,Sub_CategoryDescription,article,ArticleDescription,article_uom'
 ];
 
 # make valid tableNames
@@ -321,7 +323,6 @@ on (a.salesorg_id=c.salesorg_id) and (a.site=c.D_Site) and (a.article=c.D_Articl
 ######################################################### END add distribution channel and bseg postings to main table
 #################################################################################
 
-
 #################################################################################
 ######################################################### START gen tableau table
 
@@ -330,19 +331,20 @@ select a.*
 FROM `gcp-wow-finance-de-lab-dev.017_map.map_stacked_all` a
 inner join 
 (
-select distinct salesorg_id, site,article
+select distinct salesorg_id, site,article,article_uom
 from (
-SELECT salesorg_id, site,article, soh_date,
+SELECT salesorg_id, site,article, article_uom,soh_date,
 sum(abs(stock_on_hand*map_diff)) as simpleAbsDollarImpact
 FROM `gcp-wow-finance-de-lab-dev.017_map.map_stacked_all`
 where abs(map_z_score) > 2 and
-gb_var = 'salesorg_id,State,site,DepartmentDescription,CategoryDescription,Sub_CategoryDescription,article,ArticleDescription'
-group by 1,2,3,4
-having simpleAbsDollarImpact > 100
+gb_var = 'salesorg_id,State,site,DepartmentDescription,CategoryDescription,Sub_CategoryDescription,article,ArticleDescription,article_uom'
+group by 1,2,3,4,5
+having simpleAbsDollarImpact > 1
 )
 ) b
-on (a.salesorg_id=b.salesorg_id) and (a.article=b.article) and (a.site=b.site)
+on (a.salesorg_id=b.salesorg_id) and (a.article=b.article) and (a.site=b.site) and (a.article_uom=b.article_uom)
 );
 
 ######################################################### END gen tableau table
 #################################################################################
+
